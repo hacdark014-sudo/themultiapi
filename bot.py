@@ -29,8 +29,6 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-
-# --- NEW IMPORTS ---
 from fastapi import FastAPI
 import uvicorn
 
@@ -47,15 +45,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------
 # ENV VARIABLES
 # ---------------------------
-def get_env(name: str, default: Optional[str] = None) -> str:
-    val = os.environ.get(name)
-    if not val:
-        if default is None:
-            raise RuntimeError(f"Missing env var: {name}")
-        return default
-    return val
-
-TOKEN = get_env("TELEGRAM_BOT_TOKEN")
+TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 ADMIN_IDS = {int(uid) for uid in os.environ.get("ADMIN_IDS", "").split(",") if uid.strip().isdigit()}
 FREE_TIER_LIMIT = int(os.environ.get("FREE_TIER_LIMIT", "20"))
 
@@ -82,11 +72,6 @@ APIS = {
         "title": "GPT-3.5 Chat",
         "description": "ChatGPT 3.5 (BJ Devs)",
         "endpoint": lambda prompt: f"https://gpt-3-5.apis-bj-devs.workers.dev/?prompt={prompt}",
-    },
-    "bj_assistant": {
-        "title": "BJ Tricks Assistant",
-        "description": "Alternate chat endpoint",
-        "endpoint": lambda text: f"https://bj-tricks-assistant.bj-dev-x.workers.dev/?text={text}",
     },
 }
 
@@ -153,8 +138,6 @@ async def call_api(session: aiohttp.ClientSession, url: str) -> Optional[str]:
 def build_main_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for key, config in APIS.items():
-        if key == "bj_assistant":
-            continue
         buttons.append([InlineKeyboardButton(text=config["title"], callback_data=f"menu:{key}")])
     return InlineKeyboardMarkup(buttons)
 
@@ -205,7 +188,6 @@ async def handle_api_request(update: Update, context: ContextTypes.DEFAULT_TYPE,
         usage_tracker.increment(user_id)
         await update.message.reply_text(result)
 
-
 # API Commands
 async def terabox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -231,7 +213,6 @@ async def gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await handle_api_request(update, context, "gpt", " ".join(context.args))
 
-
 # Callback
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -244,7 +225,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"Send me input for <b>{cfg['title']}</b>", parse_mode=ParseMode.HTML)
         else:
             await q.edit_message_text("Unknown option.")
-
 
 # Admin
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,7 +250,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning("Broadcast failed to %s: %s", uid, e)
     await update.message.reply_text(f"Broadcast sent to {sent} users.")
 
-
 # Premium
 async def gen_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -279,13 +258,11 @@ async def gen_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /gen_code <days>")
         return
-
     try:
         days = int(context.args[0])
     except ValueError:
         await update.message.reply_text("Invalid number of days.")
         return
-
     code = secrets.token_hex(4)
     redeem_codes[code] = (days, update.effective_user.id)
     await update.message.reply_text(f"✅ Redeem code generated:\n`{code}` (valid {days} days)", parse_mode="Markdown")
@@ -294,12 +271,10 @@ async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /redeem <code>")
         return
-
     code = context.args[0].strip()
     if code not in redeem_codes:
         await update.message.reply_text("❌ Invalid or already used code.")
         return
-
     days, admin_id = redeem_codes.pop(code)
     expiry = datetime.utcnow() + timedelta(days=days)
     premium_users[update.effective_user.id] = expiry
@@ -335,11 +310,18 @@ def health():
 
 # --- Main asyncio runner ---
 async def main():
-    bot_task = asyncio.create_task(application.run_polling(stop_signals=None))
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, loop="asyncio")
     server = uvicorn.Server(config)
-    api_task = asyncio.create_task(server.serve())
-    await asyncio.gather(bot_task, api_task)
+    await server.serve()
+
+    # On exit
+    await application.updater.stop()
+    await application.stop()
+    await application.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
